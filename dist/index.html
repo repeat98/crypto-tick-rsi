@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Tick Chart</title>
+  <style>
+    :root {
+      --bg-color:     #ffffff;
+      --text-color:   #000000;
+      --grid-line:    #e0e0e0;
+      --crosshair:    #888888;
+      --watermark-color: rgba(0, 0, 0, 0.1);
+      --price-line-color: #000000;
+    }
+    body.light {
+      --bg-color:   #ffffff;
+      --text-color: #000000;
+      --grid-line:  #e0e0e0;
+      --crosshair:  #888888;
+    }
+    body.dark {
+      --bg-color:   #0F0F0F;
+      --text-color: #D9D9D9;
+      --grid-line:  #1C1C1C;
+      --crosshair:  #758696;
+      --watermark-color: rgba(255, 255, 255, 0.1);
+      --price-line-color: #ffffff;
+    }
+    html, body {
+      margin: 0; padding: 0;
+      width: 100vw; height: 100vh;
+      display: flex; flex-direction: column;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+    }
+    #chart {
+      flex: 1;
+    }
+    #rsi-chart {
+      flex: 1;
+    }
+    select, button {
+      position: absolute;
+      top: 10px;
+      z-index: 10;
+      padding: 5px 10px;
+      background: var(--bg-color);
+      color: var(--text-color);
+      border: 1px solid var(--grid-line);
+      border-radius: 4px;
+    }
+    #symbol { left: 10px; }
+    #theme-toggle { right: 10px; }
+  </style>
+  <script type="module" crossorigin src="/assets/index-uKdN6EA7.js"></script>
+</head>
+<body>
+  <select id="symbol">
+    <option value="BTCUSDT">BTC/USDT</option>
+    <option value="SOLUSDT">SOL/USDT</option>
+    <option value="AVAXUSDT">AVAX/USDT</option>
+    <option value="ETHUSDT">ETH/USDT</option>
+    <option value="ATOMUSDT">ATOM/USDT</option>
+    <option value="LINKUSDT">LINK/USDT</option>
+    <option value="LTCUSDT">LTC/USDT</option>
+    <option value="APTUSDT">APT/USDT</option>
+    <option value="MANAUSDT">MANA/USDT</option>
+  </select>
+  <button id="theme-toggle">Switch to Light Mode</button>
+  <div id="chart"></div>
+  <div id="rsi-chart"></div>
+</body>
+</html>
