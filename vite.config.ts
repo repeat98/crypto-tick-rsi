@@ -5,7 +5,7 @@ import tsconfigPaths from 'vite-plugin-tsconfig-paths';
 export default defineConfig({
   // point Vite at your UI folder
   root: 'src/ui',
-  base: '/crypto-tick-rsi/',
+  base: './',
 
   // so imports like `import { ChartManager } from '@/charts/chartManager'` still work
   plugins: [tsconfigPaths()],
