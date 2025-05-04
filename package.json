@@ -1,0 +1,24 @@
+{
+  "name": "crypto-tick-chart",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "serve": "vite preview"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "lightweight-charts": "^5.0.6",
+    "rxjs": "^7.8.2",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "vite-plugin-tsconfig-paths": "^1.4.1"
+  }
+}
