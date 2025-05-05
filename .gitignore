@@ -1,3 +1,10 @@
 node_modules/
 .DS_Store
 dist/
+.venv/
+data/
+checkpoints/
+models/
+outputs/
+gaf/    
+labels/

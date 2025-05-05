@@ -1,0 +1,8 @@
+python3 preprocess2.py \
+  data/SOLUSD \
+  gaf \
+  --window 5T \ 
+  --stride 1T \
+  --image_size 224 \
+  --method summation \
+  --workers 8

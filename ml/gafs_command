@@ -1,0 +1,7 @@
+python convert_gaf.py \
+    /path/to/solusd_parquets/ \
+    /path/to/gaf_output/ \
+    --seq_len 2048 \
+    --stride   512 \
+    --image_size 224 \
+    --method summation

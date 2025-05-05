@@ -1,0 +1,9 @@
+python3 train.py \
+  labels \
+  gaf \
+  --batch_size 64 \
+  --epochs 20 \
+  --lr 1e-4 \
+  --wd 1e-5 \
+  --workers 8 \
+  --model_out best_model.pth

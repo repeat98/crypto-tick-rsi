@@ -1,0 +1,10 @@
+python3 label_time_resampled.py \
+  /path/to/solusd_parquets/ \
+  /path/to/gaf_output/ \
+  /path/to/labels_dir/ \
+  --freq 1S \
+  --window 5T \
+  --horizon 5T \
+  --stride 5T \
+  --q_low 0.2 \
+  --q_high 0.8

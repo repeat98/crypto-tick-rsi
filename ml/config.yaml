@@ -1,0 +1,25 @@
+
+data_dir:      "data/SOLUSD"
+output_dir:    "checkpoints/"
+seq_len:       100
+batch_size:    64
+num_workers:   8
+
+d_model:       64
+n_heads:       4
+num_layers:    2
+diff_steps:    50
+
+lr:            1e-3
+gamma:         0.5
+step_size:     10
+diff_weight:   0.1
+
+epochs:        50
+ckpt_every:    5
+
+profile:       false
+use_amp:       true
+use_compile:   true
+use_checkpoint: false
+accum_steps:   1
