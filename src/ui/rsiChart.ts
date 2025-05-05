@@ -1,4 +1,3 @@
-// src/charts/rsiChart.ts
 import {
   createChart,
   IChartApi,
@@ -15,9 +14,10 @@ type SmoothingType = 'None' | 'SMA' | 'SMA+BB' | 'EMA' | 'SMMA' | 'WMA' | 'VWMA'
 
 interface RSIChartOptions {
   period?: number;               // RSI lookback
-  smoothingType?: SmoothingType;
+  smoothingType?: SmoothingType; // smoothing for extra MA series
   smoothingLength?: number;      // for extra smoothing / BB
   bbMultiplier?: number;
+  maTimeframeSeconds?: number;   // timeframe for the 1m MA in seconds
 }
 
 export class RSIChart {
@@ -30,6 +30,7 @@ export class RSIChart {
   private bbUpperSeries:  ISeriesApi<'Line'>  | null = null;
   private bbLowerSeries:  ISeriesApi<'Line'>  | null = null;
   private bbAreaSeries:   ISeriesApi<'Area'>  | null = null;
+  private maSeries:       ISeriesApi<'Line'>  | null = null;  // 1m timeframe MA series
 
   private period: number;
   private prevPrice?: number;
@@ -40,23 +41,26 @@ export class RSIChart {
 
   private windowSize: number;
   private buffer: number[] = [];
+  private maBuffer: { time: number; value: number }[] = []; // buffer for timeframe MA
 
   private smoothingType:   SmoothingType;
   private smoothingLength: number;
   private bbMultiplier:    number;
+  private maTimeframe:     number; // in seconds
 
   constructor(container: HTMLElement, options: RSIChartOptions = {}) {
     this.container = container;
     container.style.width  = '100vw';
     container.style.height = '50vh';
 
-    this.period           = options.period ?? 14;
+    // User-specified or defaults:
+    this.period           = options.period ?? 14;           // default RSI length 14
     this.windowSize       = options.smoothingLength ?? 40;
-    this.smoothingType    = options.smoothingType   ?? 'None';
+    this.smoothingType    = options.smoothingType   ?? 'SMA'; // default SMA smoothing
     this.smoothingLength  = options.smoothingLength ?? this.windowSize;
     this.bbMultiplier     = options.bbMultiplier    ?? 2;
+    this.maTimeframe      = options.maTimeframeSeconds ?? 60; // 1 minute
 
-    // Create chart with fixed 0–100 scale and current theme
     this.chart = createChart(container, this.currentOptions());
     new ResizeObserver(() => {
       this.chart.resize(container.clientWidth, container.clientHeight);
@@ -68,121 +72,108 @@ export class RSIChart {
     const price = point.value;
     if (!isFinite(price)) return;
 
-    // First tick: seed
+    // RSI core calculation (unchanged)...
     let rsiValue: number;
     if (this.prevPrice === undefined) {
       this.prevPrice = price;
-      // push zero change to build arrays
       this.gains.push(0);
       this.losses.push(0);
-      rsiValue = 50;  // neutral start
+      rsiValue = 50;
     } else {
       const change = price - this.prevPrice;
       this.prevPrice = price;
       this.gains.push(Math.max(0, change));
       this.losses.push(Math.max(0, -change));
-      if (this.gains.length > this.period) {
-        this.gains.shift();
-        this.losses.shift();
-      }
-
+      if (this.gains.length > this.period) { this.gains.shift(); this.losses.shift(); }
       if (this.avgGain === undefined && this.gains.length === this.period) {
-        // first average
         this.avgGain = this.gains.reduce((sum, v) => sum + v, 0) / this.period;
         this.avgLoss = this.losses.reduce((sum, v) => sum + v, 0) / this.period;
       }
-
       if (this.avgGain !== undefined) {
-        // Wilder smoothing
         this.avgGain = (this.avgGain * (this.period - 1) + this.gains[this.gains.length - 1]) / this.period;
         this.avgLoss = (this.avgLoss! * (this.period - 1) + this.losses[this.losses.length - 1]) / this.period;
-
         const rs = this.avgLoss === 0 ? Infinity : this.avgGain! / this.avgLoss!;
         rsiValue = 100 - 100 / (1 + rs);
       } else {
-        // not enough data yet
         rsiValue = 50;
       }
     }
-
-    // clamp to [0,100]
     rsiValue = Math.max(0, Math.min(100, rsiValue));
 
-    // Raw RSI line
+    // Draw raw RSI...
     if (!this.rawSeries) {
-      this.rawSeries = this.chart.addSeries(LineSeries) as ISeriesApi<'Line'>;
+      this.rawSeries = this.chart.addSeries(LineSeries);
       this.rawSeries.applyOptions({ color: '#7E57C2', lineWidth: 2, priceLineVisible: false });
       this.rawSeries.setData([{ time: point.time as any, value: rsiValue }]);
       [70, 50, 30].forEach(level =>
-        this.rawSeries!.createPriceLine({
-          price: level,
-          color: '#9E9E9E',
-          lineWidth: 1,
-          lineStyle: LineStyle.Dashed,
-          axisLabelVisible: false,
-          title: String(level),
-        })
+        this.rawSeries!.createPriceLine({ price: level, color: '#9E9E9E', lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false, title: String(level) })
       );
     } else {
       this.rawSeries.update({ time: point.time as any, value: rsiValue });
     }
 
-    // Rolling buffer of RSI for SMA smoothing
+    // --- 1m timeframe MA of RSI ---
+    const ts = point.time as number;
+    this.maBuffer.push({ time: ts, value: rsiValue });
+    const cutoff = ts - this.maTimeframe;
+    this.maBuffer = this.maBuffer.filter(d => d.time >= cutoff);
+    const maValue = this.maBuffer.reduce((s, d) => s + d.value, 0) / this.maBuffer.length;
+    const maPoint: LineData = { time: point.time as any, value: maValue };
+    if (!this.maSeries) {
+      this.maSeries = this.chart.addSeries(LineSeries);
+      this.maSeries.applyOptions({ color: '#29B6F6', lineWidth: 2, priceLineVisible: false });
+      this.maSeries.setData([maPoint]);
+    } else {
+      this.maSeries.update(maPoint);
+    }
+
+    // Continue SMA buffer smoothing / BB logic...
     this.buffer.push(rsiValue);
     if (this.buffer.length > this.windowSize) this.buffer.shift();
     if (this.buffer.length < this.windowSize) return;
 
-    // Simple SMA
     const mean = this.buffer.reduce((a, v) => a + v, 0) / this.windowSize;
-    const smoothPoint = { time: point.time as any, value: mean };
     if (!this.smoothSeries) {
-      this.smoothSeries = this.chart.addSeries(LineSeries) as ISeriesApi<'Line'>;
+      this.smoothSeries = this.chart.addSeries(LineSeries);
       this.smoothSeries.applyOptions({ color: '#F57F19', lineWidth: 2, priceLineVisible: false });
-      this.smoothSeries.setData([smoothPoint as LineData]);
+      this.smoothSeries.setData([{ time: point.time as any, value: mean }]);
     } else {
-      this.smoothSeries.update(smoothPoint as LineData);
+      this.smoothSeries.update({ time: point.time as any, value: mean });
     }
 
-    // Optional extra smoothing + BB on the SMA series
     if (this.smoothingType !== 'None') {
-      const maValue = this.computeMA(this.buffer, this.smoothingType);
-      if (isFinite(maValue)) {
-        const maPoint = { time: point.time as any, value: maValue };
+      const extra = this.computeMA(this.buffer, this.smoothingType);
+      if (isFinite(extra)) {
         if (!this.smoothingSeries) {
-          this.smoothingSeries = this.chart.addSeries(LineSeries) as ISeriesApi<'Line'>;
+          this.smoothingSeries = this.chart.addSeries(LineSeries);
           this.smoothingSeries.applyOptions({ color: '#FF9800', lineWidth: 1, priceLineVisible: false });
-          this.smoothingSeries.setData([maPoint as LineData]);
+          this.smoothingSeries.setData([{ time: point.time as any, value: extra }]);
         } else {
-          this.smoothingSeries.update(maPoint as LineData);
+          this.smoothingSeries.update({ time: point.time as any, value: extra });
         }
         if (this.smoothingType === 'SMA+BB') {
           const slice = this.buffer.slice(-this.smoothingLength);
-          const variance = slice.reduce((sum, v) => sum + (v - maValue) ** 2, 0) / this.smoothingLength;
+          const variance = slice.reduce((sum, v) => sum + (v - extra) ** 2, 0) / this.smoothingLength;
           const stdev = Math.sqrt(variance);
-          const upper = maValue + stdev * this.bbMultiplier;
-          const lower = maValue - stdev * this.bbMultiplier;
-          const upperData = { time: point.time as any, value: upper } as LineData;
-          const lowerData = { time: point.time as any, value: lower } as LineData;
-
+          const upper = extra + stdev * this.bbMultiplier;
+          const lower = extra - stdev * this.bbMultiplier;
+          const up: LineData = { time: point.time as any, value: upper };
+          const low: LineData = { time: point.time as any, value: lower };
           if (!this.bbUpperSeries) {
-            this.bbUpperSeries = this.chart.addSeries(LineSeries) as ISeriesApi<'Line'>;
-            this.bbLowerSeries = this.chart.addSeries(LineSeries) as ISeriesApi<'Line'>;
-            this.bbAreaSeries  = this.chart.addSeries(AreaSeries) as ISeriesApi<'Area'>;
+            this.bbUpperSeries = this.chart.addSeries(LineSeries);
+            this.bbLowerSeries = this.chart.addSeries(LineSeries);
+            this.bbAreaSeries  = this.chart.addSeries(AreaSeries);
             this.bbUpperSeries.applyOptions({ priceLineVisible: false });
             this.bbLowerSeries.applyOptions({ priceLineVisible: false });
-            this.bbAreaSeries.applyOptions({
-              lineVisible: false,
-              topColor: 'rgba(255,152,0,0.2)',
-              bottomColor: 'rgba(255,152,0,0.05)',
-            });
-            this.bbUpperSeries.setData([upperData]);
-            this.bbLowerSeries.setData([lowerData]);
-            (this.bbAreaSeries as ISeriesApi<'Area'>).setData([upperData, lowerData] as AreaData[]);
+            this.bbAreaSeries.applyOptions({ lineVisible: false, topColor: 'rgba(255,152,0,0.2)', bottomColor: 'rgba(255,152,0,0.05)' });
+            this.bbUpperSeries.setData([up]);
+            this.bbLowerSeries.setData([low]);
+            this.bbAreaSeries.setData([up, low]);
           } else {
-            this.bbUpperSeries.update(upperData);
-            this.bbLowerSeries.update(lowerData);
-            (this.bbAreaSeries as ISeriesApi<'Area'>).update(upperData);
-            (this.bbAreaSeries as ISeriesApi<'Area'>).update(lowerData);
+            this.bbUpperSeries.update(up);
+            this.bbLowerSeries.update(low);
+            this.bbAreaSeries.update(up);
+            this.bbAreaSeries.update(low);
           }
         }
       }
@@ -192,19 +183,20 @@ export class RSIChart {
   public clear() {
     [
       this.rawSeries,
+      this.maSeries,
       this.smoothSeries,
       this.smoothingSeries,
       this.bbUpperSeries,
       this.bbLowerSeries,
       this.bbAreaSeries,
     ].forEach(s => s && this.chart.removeSeries(s));
-    this.rawSeries = this.smoothSeries = this.smoothingSeries =
-      this.bbUpperSeries = this.bbLowerSeries = this.bbAreaSeries = null;
+    this.rawSeries = this.maSeries = this.smoothSeries = this.smoothingSeries = this.bbUpperSeries = this.bbLowerSeries = this.bbAreaSeries = null;
     this.prevPrice = undefined;
     this.gains = [];
     this.losses = [];
     this.avgGain = this.avgLoss = undefined;
     this.buffer = [];
+    this.maBuffer = [];
   }
 
   public applyTheme() {
