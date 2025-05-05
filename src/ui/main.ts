@@ -1,9 +1,7 @@
 // src/ui/main.ts
-import { RSI } from '../charts/indicators';
-import { RSIChart } from './rsiChart';
+import { BinanceConnector, RawTick } from '../api/binanceConnector';
 import { initMainChart } from './mainChart';
-import { BinanceConnector } from '../api/binanceConnector';
-import { normalizeTick } from '../charts/dataNormalizer';
+import { RSIChart } from './rsiChart';
 import { throttleTime, map, pairwise } from 'rxjs/operators';
 import { Subscription, animationFrameScheduler, fromEvent } from 'rxjs';
 
@@ -13,87 +11,76 @@ const rsiDiv        = document.getElementById('rsi-chart')!;
 const themeToggle   = document.getElementById('theme-toggle') as HTMLButtonElement;
 
 const { chartManager } = initMainChart(chartDiv);
-const rsiChart = new RSIChart(rsiDiv);
+const rsiChart = new RSIChart(rsiDiv, 14);  // 14-period RSI baked into the chart
 
 let connector: BinanceConnector | null = null;
 let liveSub:    Subscription | null = null;
-let rsi:        RSI;
 
-// loadSymbol now disables the selector until it's fully initialized
+// normalize a RawTick into { time: seconds, value: price }
+function normalize(tick: RawTick) {
+  const timeSec = Math.floor(tick.E / 1000);
+  if (tick.p) {
+    return { time: timeSec, value: parseFloat(tick.p) };
+  }
+  const mid = (parseFloat(tick.b!) + parseFloat(tick.a!)) / 2;
+  return { time: timeSec, value: mid };
+}
+
 async function loadSymbol(symbol: string) {
   symbolSelect.disabled = true;
   try {
-    // 1) clear charts and old socket
     chartManager.clear();
     rsiChart.clear();
-    if (liveSub) {
-      liveSub.unsubscribe();
-      liveSub = null;
-    }
-    if (connector) {
-      connector.close();  // new method to fully tear down WS
-      connector = null;
-    }
+    liveSub?.unsubscribe();
+    connector?.close();
 
-    // 2) reset RSI calculator
-    rsi = new RSI(14);
-
-    // 3) create new connector
     connector = new BinanceConnector(symbol);
 
-    // 4) fetch & draw 1h history
+    // 1h history
     const rawHist = await connector.fetchHistorical(60 * 60 * 1000);
-    const normed  = rawHist.map(normalizeTick);
-    normed.forEach((curr, i, arr) => {
-      if (i === 0) return;
-      const prev = arr[i - 1];
-      chartManager.updatePrice({ time: curr.time, value: curr.value });
-      const r = rsi.update(curr, prev);
-      rsiChart.update(r);
+    const normed  = rawHist.map(normalize);
+    normed.forEach(point => {
+      chartManager.updatePrice(point);
+      rsiChart.update(point);
     });
 
-    // 5) subscribe to live ticks at ~60 FPS
+    // live ticks ~60FPS
     liveSub = connector.ticks$
       .pipe(
         throttleTime(16, animationFrameScheduler),
-        map(normalizeTick),
+        map(normalize),
         pairwise()
       )
       .subscribe(([prev, curr]) => {
-        chartManager.updatePrice({ time: curr.time, value: curr.value });
-        const r = rsi.update(curr, prev);
-        rsiChart.update(r);
+        chartManager.updatePrice(curr);
+        rsiChart.update(curr);
       });
   } finally {
     symbolSelect.disabled = false;
   }
 }
 
+// theme toggling (unchanged)
 function applyTheme(mode: 'light' | 'dark') {
   document.body.classList.toggle('dark', mode === 'dark');
   document.body.classList.toggle('light', mode === 'light');
   chartManager.applyTheme();
   rsiChart.applyTheme();
-  themeToggle.textContent = mode === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode';
+  themeToggle.textContent = mode === 'dark'
+    ? 'Switch to Light Mode'
+    : 'Switch to Dark Mode';
 }
 
-// Debounce symbol changes by 300ms to prevent glitches
 fromEvent(symbolSelect, 'change')
   .pipe(
     map((e: Event) => (e.target as HTMLSelectElement).value),
     throttleTime(300)
   )
-  .subscribe(value => {
-    loadSymbol(value);
-  });
+  .subscribe(loadSymbol);
 
-// initialize
 loadSymbol(symbolSelect.value);
-
-// theme toggle setup
+applyTheme('dark');
 themeToggle.addEventListener('click', () => {
   const newMode = document.body.classList.contains('dark') ? 'light' : 'dark';
   applyTheme(newMode);
 });
-// start in dark mode
-applyTheme('dark');
