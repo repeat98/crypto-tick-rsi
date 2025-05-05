@@ -9,3 +9,4 @@ outputs/
 gaf/    
 labels/
 *.pth
+gaf_multiframe/
