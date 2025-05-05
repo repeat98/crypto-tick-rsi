@@ -5,6 +5,9 @@ import { RSIChart } from './rsiChart';
 import { throttleTime, map, pairwise } from 'rxjs/operators';
 import { Subscription, animationFrameScheduler, fromEvent } from 'rxjs';
 
+const STORAGE_SYMBOL_KEY = 'selectedSymbol';
+const STORAGE_MODE_KEY   = 'themeMode';
+
 const symbolSelect = document.getElementById('symbol') as HTMLSelectElement;
 const chartDiv      = document.getElementById('chart')!;
 const rsiDiv        = document.getElementById('rsi-chart')!;
@@ -29,6 +32,8 @@ function normalize(tick: RawTick) {
 
 async function loadSymbol(symbol: string) {
   symbolSelect.disabled = true;
+  // persist the selected symbol
+  localStorage.setItem(STORAGE_SYMBOL_KEY, symbol);
   try {
     chartManager.clear();
     rsiChart.clear();
@@ -79,6 +84,8 @@ function applyTheme(mode: 'light' | 'dark') {
   pingDiv.style.borderColor = getComputedStyle(document.body).getPropertyValue('--grid-line').trim();
   // swap icon
   themeToggle.innerHTML = mode === 'dark' ? sunIcon : moonIcon;
+  // persist the theme mode
+  localStorage.setItem(STORAGE_MODE_KEY, mode);
 }
 
 fromEvent(symbolSelect, 'change')
@@ -88,8 +95,17 @@ fromEvent(symbolSelect, 'change')
   )
   .subscribe(loadSymbol);
 
+// on startup, restore persisted symbol (if any) and load it
+const savedSymbol = localStorage.getItem(STORAGE_SYMBOL_KEY);
+if (savedSymbol) {
+  symbolSelect.value = savedSymbol;
+}
 loadSymbol(symbolSelect.value);
-applyTheme('dark');
+
+// on startup, restore persisted theme mode (default to dark)
+const savedMode = localStorage.getItem(STORAGE_MODE_KEY) as 'light' | 'dark' | null;
+applyTheme(savedMode === 'light' ? 'light' : 'dark');
+
 themeToggle.addEventListener('click', () => {
   const newMode: 'light' | 'dark' = document.body.classList.contains('dark') ? 'light' : 'dark';
   applyTheme(newMode);
