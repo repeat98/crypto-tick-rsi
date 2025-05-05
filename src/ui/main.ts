@@ -1,7 +1,7 @@
-// src/ui/main.ts
 import { BinanceConnector, RawTick } from '../api/binanceConnector';
 import { initMainChart } from './mainChart';
 import { RSIChart } from './rsiChart';
+import { SqueezeMomentumChart } from './smoChart';
 import { throttleTime, map, pairwise } from 'rxjs/operators';
 import { Subscription, animationFrameScheduler, fromEvent } from 'rxjs';
 
@@ -11,6 +11,7 @@ const STORAGE_MODE_KEY   = 'themeMode';
 const symbolSelect = document.getElementById('symbol') as HTMLSelectElement;
 const chartDiv      = document.getElementById('chart')!;
 const rsiDiv        = document.getElementById('rsi-chart')!;
+const smoDiv        = document.getElementById('smo-chart')!;
 const pingDiv       = document.getElementById('ping')!;
 const themeToggle   = document.getElementById('theme-toggle') as HTMLButtonElement;
 const moonIcon = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>`;
@@ -18,6 +19,7 @@ const sunIcon  = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" st
 
 const { chartManager } = initMainChart(chartDiv);
 const rsiChart = new RSIChart(rsiDiv, { period: 14 });
+const smoChart = new SqueezeMomentumChart(smoDiv, { period: 20 });
 
 let connector: BinanceConnector | null = null;
 let liveSub:    Subscription | null = null;
@@ -32,18 +34,18 @@ function normalize(tick: RawTick) {
 
 async function loadSymbol(symbol: string) {
   symbolSelect.disabled = true;
-  // persist the selected symbol
   localStorage.setItem(STORAGE_SYMBOL_KEY, symbol);
   try {
     chartManager.clear();
     rsiChart.clear();
+    smoChart.clear();
     liveSub?.unsubscribe();
     pingSub?.unsubscribe();
     connector?.close();
 
     connector = new BinanceConnector(symbol);
 
-    // Ping indicator on every raw tick
+    // Ping indicator
     pingSub = connector.ticks$.subscribe((tick: RawTick) => {
       const ms = Date.now() - tick.E;
       pingDiv.textContent = `Ping: ${ms.toFixed(0)} ms`;
@@ -55,9 +57,10 @@ async function loadSymbol(symbol: string) {
     normed.forEach(point => {
       chartManager.updatePrice(point);
       rsiChart.update(point);
+      smoChart.update(point);
     });
 
-    // Live ticks ~60FPS for chart & RSI
+    // Live ticks ~60FPS
     liveSub = connector.ticks$
       .pipe(
         throttleTime(16, animationFrameScheduler),
@@ -67,6 +70,7 @@ async function loadSymbol(symbol: string) {
       .subscribe(([, curr]) => {
         chartManager.updatePrice(curr);
         rsiChart.update(curr);
+        smoChart.update(curr);
       });
   } finally {
     symbolSelect.disabled = false;
@@ -78,31 +82,22 @@ function applyTheme(mode: 'light' | 'dark') {
   document.body.classList.toggle('light', mode === 'light');
   chartManager.applyTheme();
   rsiChart.applyTheme();
-  // update ping background too
+  smoChart.applyTheme();
   pingDiv.style.background  = getComputedStyle(document.body).getPropertyValue('--bg-color').trim();
   pingDiv.style.color       = getComputedStyle(document.body).getPropertyValue('--text-color').trim();
   pingDiv.style.borderColor = getComputedStyle(document.body).getPropertyValue('--grid-line').trim();
-  // swap icon
   themeToggle.innerHTML = mode === 'dark' ? sunIcon : moonIcon;
-  // persist the theme mode
   localStorage.setItem(STORAGE_MODE_KEY, mode);
 }
 
 fromEvent(symbolSelect, 'change')
-  .pipe(
-    map((e: Event) => (e.target as HTMLSelectElement).value),
-    throttleTime(300)
-  )
+  .pipe(map((e: Event) => (e.target as HTMLSelectElement).value), throttleTime(300))
   .subscribe(loadSymbol);
 
-// on startup, restore persisted symbol (if any) and load it
 const savedSymbol = localStorage.getItem(STORAGE_SYMBOL_KEY);
-if (savedSymbol) {
-  symbolSelect.value = savedSymbol;
-}
+if (savedSymbol) symbolSelect.value = savedSymbol;
 loadSymbol(symbolSelect.value);
 
-// on startup, restore persisted theme mode (default to dark)
 const savedMode = localStorage.getItem(STORAGE_MODE_KEY) as 'light' | 'dark' | null;
 applyTheme(savedMode === 'light' ? 'light' : 'dark');
 
