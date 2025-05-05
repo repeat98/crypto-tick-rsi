@@ -5,7 +5,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import OneCycleLR
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, models
 from PIL import Image
@@ -52,7 +52,7 @@ class GAFDataset(Dataset):
         return x, y
 
 
-def train_one_epoch(model, loader, criterion, optimizer, scaler, device, scheduler):
+def train_one_epoch(model, loader, criterion, optimizer, scaler, device):
     model.train()
     pbar = tqdm(loader, desc='Train', leave=False)
     running_loss = 0.0
@@ -73,10 +73,6 @@ def train_one_epoch(model, loader, criterion, optimizer, scaler, device, schedul
         else:
             loss.backward()
             optimizer.step()
-
-        # Step scheduler per batch
-        if scheduler:
-            scheduler.step()
 
         batch_size = y.size(0)
         running_loss += loss.item() * batch_size
@@ -184,17 +180,8 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
-    # One-Cycle LR schedule
-    steps_per_epoch = len(train_loader)
-    scheduler = OneCycleLR(
-        optimizer,
-        max_lr=args.lr,
-        epochs=args.epochs,
-        steps_per_epoch=steps_per_epoch,
-        pct_start=0.3,
-        div_factor=25.0,
-        final_div_factor=1e4,
-    )
+    # Cosine annealing LR schedule
+    scheduler = CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
 
     # Mixed precision: FP16 on CUDA (with scaler), BF16 on MPS (no scaler needed)
     if device.type == 'cuda':
@@ -206,10 +193,8 @@ def main():
 
     best_val_acc = 0.0
     for epoch in range(1, args.epochs + 1):
-        train_loss, train_acc = train_one_epoch(
-            model, train_loader,
-            criterion, optimizer, scaler, device, scheduler
-        )
+        train_loss, train_acc = train_one_epoch(model, train_loader,
+                                                criterion, optimizer, scaler, device)
         val_acc = evaluate(model, val_loader, device)
         print(f"Epoch {epoch}/{args.epochs} - "
               f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, "
@@ -219,6 +204,8 @@ def main():
             best_val_acc = val_acc
             torch.save(model.state_dict(), args.model_out)
             print(f"Saved best model to {args.model_out}")
+
+        scheduler.step()
 
     # Final test evaluation
     model.load_state_dict(torch.load(args.model_out, map_location=device))
