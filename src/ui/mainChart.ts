@@ -53,6 +53,11 @@ export class ChartManager implements ThemeableChartManager {
     }
   }
 
+  public zoomToLast(seconds: number) {
+    const now = Math.floor(Date.now() / 1000);
+    this.chart.timeScale().setVisibleRange({ from: now - seconds, to: now });
+  }
+
   private currentOptions() {
     const styles = getComputedStyle(document.body);
     return {
@@ -72,7 +77,7 @@ export class ChartManager implements ThemeableChartManager {
         horzLine: { color: styles.getPropertyValue('--crosshair').trim(), width: 1, style: 0 },
       },
       rightPriceScale: { borderColor: styles.getPropertyValue('--grid-line').trim() },
-      timeScale:       { borderColor: styles.getPropertyValue('--grid-line').trim(), timeVisible: true, secondsVisible: true },
+      timeScale:       { borderColor: styles.getPropertyValue('--grid-line').trim(), timeVisible: true, secondsVisible: true, shiftVisibleRangeOnNewBar: true },
       watermark: {
         visible: true,
         fontSize: 24,

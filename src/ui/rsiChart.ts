@@ -212,6 +212,11 @@ export class RSIChart {
     this.chart.applyOptions(this.currentOptions());
   }
 
+  public zoomToLast(seconds: number) {
+    const now = Math.floor(Date.now() / 1000);
+    this.chart.timeScale().setVisibleRange({ from: now - seconds, to: now });
+  }
+
   private currentOptions() {
     const styles = getComputedStyle(document.body);
     return {
@@ -239,6 +244,7 @@ export class RSIChart {
         borderVisible: false,
         timeVisible:   true,
         secondsVisible:true,
+        shiftVisibleRangeOnNewBar: true,
       },
     } as any;
   }

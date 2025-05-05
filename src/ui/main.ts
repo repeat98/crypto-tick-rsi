@@ -54,11 +54,20 @@ async function loadSymbol(symbol: string) {
     // 1h history
     const rawHist = await connector.fetchHistorical(60 * 60 * 1000);
     const normed  = rawHist.map(normalize);
-    normed.forEach(point => {
+    // only keep the last 7 minutes of history (420 seconds)
+    const nowSec = Math.floor(Date.now() / 1000);
+    const sevenMinAgo = nowSec - 7 * 60;
+    const recentNormed = normed.filter(point => point.time >= sevenMinAgo);
+    recentNormed.forEach(point => {
       chartManager.updatePrice(point);
       rsiChart.update(point);
       smoChart.update(point);
     });
+
+    // zoom all charts to last 7 minutes
+    chartManager.zoomToLast(7 * 60);
+    rsiChart.zoomToLast(7 * 60);
+    smoChart.zoomToLast(7 * 60);
 
     // Live ticks ~60FPS
     liveSub = connector.ticks$
@@ -71,6 +80,10 @@ async function loadSymbol(symbol: string) {
         chartManager.updatePrice(curr);
         rsiChart.update(curr);
         smoChart.update(curr);
+        // keep time scale pinned to real-time after each tick on all charts
+        chartManager.zoomToLast(7 * 60);
+        rsiChart.zoomToLast(7 * 60);
+        smoChart.zoomToLast(7 * 60);
       });
   } finally {
     symbolSelect.disabled = false;
