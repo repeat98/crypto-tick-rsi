@@ -9,8 +9,19 @@ python3 preprocess2.py \
 
 
   python3 preprocess_multiframe.py \
-  data/SOLUSD \
-  gaf_multiframe \
+  --freq 1S \
+  --window 5T \
+  --stride 1T \
+  --image_size 224 \
+  --method summation \
+  --workers 8
+    data/SOLUSD \
+  gaf_multiframe 
+
+
+python3 preprocess_klines.py \
+  data/SOLUSD_klines \
+  gaf_multiframe_klines \
   --freq 1S \
   --window 5T \
   --stride 1T \

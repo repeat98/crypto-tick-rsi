@@ -10,3 +10,4 @@ gaf/
 labels/
 *.pth
 gaf_multiframe/
+labels_multiframe/
