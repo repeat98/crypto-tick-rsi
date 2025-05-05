@@ -1,3 +1,4 @@
+<!-- index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -33,41 +34,66 @@
       background-color: var(--bg-color);
       color: var(--text-color);
     }
-    #chart {
-      flex: 1;
-    }
-    #rsi-chart {
-      flex: 1;
-    }
-    select, button {
+
+    /* control bar */
+    #controls {
       position: absolute;
       top: 10px;
+      left: 10px;
+      display: flex;
+      gap: 10px;
+      z-index: 10;
+    }
+    #controls select,
+    #controls button {
+      padding: 5px 10px;
+      background: var(--bg-color);
+      color: var(--text-color);
+      border: 1px solid var(--grid-line);
+      border-radius: 4px;
+      font-size: 1em;
+      cursor: pointer;
+    }
+
+    #chart   { flex: 1; }
+    #rsi-chart { flex: 1; }
+
+    /* ping indicator */
+    #ping {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
       z-index: 10;
       padding: 5px 10px;
       background: var(--bg-color);
       color: var(--text-color);
       border: 1px solid var(--grid-line);
       border-radius: 4px;
+      font-family: sans-serif;
+      font-size: 0.9em;
     }
-    #symbol { left: 10px; }
-    #theme-toggle { right: 10px; }
   </style>
 </head>
 <body>
-  <select id="symbol">
-    <option value="BTCUSDT">BTC/USDT</option>
-    <option value="SOLUSDT">SOL/USDT</option>
-    <option value="AVAXUSDT">AVAX/USDT</option>
-    <option value="ETHUSDT">ETH/USDT</option>
-    <option value="ATOMUSDT">ATOM/USDT</option>
-    <option value="LINKUSDT">LINK/USDT</option>
-    <option value="LTCUSDT">LTC/USDT</option>
-    <option value="APTUSDT">APT/USDT</option>
-    <option value="MANAUSDT">MANA/USDT</option>
-  </select>
-  <button id="theme-toggle">Switch to Light Mode</button>
+  <div id="controls">
+    <select id="symbol">
+      <option value="BTCUSDT">BTC/USDT</option>
+      <option value="SOLUSDT">SOL/USDT</option>
+      <option value="AVAXUSDT">AVAX/USDT</option>
+      <option value="ETHUSDT">ETH/USDT</option>
+      <option value="ATOMUSDT">ATOM/USDT</option>
+      <option value="LINKUSDT">LINK/USDT</option>
+      <option value="LTCUSDT">LTC/USDT</option>
+      <option value="APTUSDT">APT/USDT</option>
+      <option value="MANAUSDT">MANA/USDT</option>
+    </select>
+    <button id="theme-toggle" aria-label="Toggle theme"></button>
+  </div>
+
   <div id="chart"></div>
   <div id="rsi-chart"></div>
+  <div id="ping">Ping: -- ms</div>
+
   <script type="module" src="./main.ts"></script>
 </body>
 </html>
