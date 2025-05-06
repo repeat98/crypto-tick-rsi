@@ -91,7 +91,7 @@ def preprocess(input_dir, data_dir, freq, window, stride, image_size):
 
 def label(input_dir, data_dir, labels_dir, freq, window, stride, horizon, ql, qh):
     """
-    Quantile-based 3-class labeling: -1 / 0 / +1
+    Save continuous returns as labels.
     """
     labels_dir = Path(labels_dir)
     labels_dir.mkdir(parents=True, exist_ok=True)
@@ -124,10 +124,9 @@ def label(input_dir, data_dir, labels_dir, freq, window, stride, horizon, ql, qh
             continue
 
         rets = np.array(rets)
-        low, high = np.quantile(rets, ql), np.quantile(rets, qh)
         rows = []
         for r, i in zip(rets, idxs):
-            lab = -1 if r <= low else 1 if r >= high else 0
+            lab = r
             rows.append({
                 'filename': f"{fp.stem}_win{i:05d}.npz",
                 'label': lab
@@ -144,7 +143,7 @@ class KlineDataset(Dataset):
         row = self.df.iloc[idx]
         arr = np.load(self.data_dir/row.filename)['data']
         x = torch.from_numpy(arr)[None].float()  # add channel dim → (1,H,W)
-        y = int(row.label) + 1
+        y = torch.tensor(row.label, dtype=torch.float32)
         return x, y
 
 def train(labels_dir, data_dir, args):
@@ -171,7 +170,7 @@ def train(labels_dir, data_dir, args):
                                       padding=orig.padding,
                                       bias=False)
     in_f = model.classifier[3].in_features
-    model.classifier[3] = nn.Linear(in_f, 3)
+    model.classifier[3] = nn.Linear(in_f, 1)
     model = model.to(device).to(memory_format=torch.channels_last)
     for p in model.features.parameters():
         p.requires_grad = False
@@ -182,47 +181,50 @@ def train(labels_dir, data_dir, args):
                            epochs=args.epochs,
                            steps_per_epoch=len(train_loader),
                            pct_start=0.1)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.MSELoss()
 
-    best_val = 0.0
+    best_val = float('inf')
     for epoch in range(1, args.epochs+1):
         model.train()
-        rl=rc=rt=0
+        running_loss = 0.0
+        running_total = 0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch} train")
         for x, y in pbar:
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
             out = model(x)
+            out = out.squeeze(1)
             loss = criterion(out, y)
             loss.backward()
             optimizer.step()
             scheduler.step()
 
-            preds = out.argmax(1)
             bs = y.size(0)
-            rl += loss.item()*bs
-            rc += (preds==y).sum().item()
-            rt += bs
+            running_loss += loss.item()*bs
+            running_total += bs
             pbar.set_postfix({
-                'loss': f"{rl/rt:.4f}",
-                'acc':  f"{rc/rt:.3f}"
+                'mse': f"{running_loss/running_total:.6f}"
             })
 
         model.eval()
-        vc=vt=0
-        for x, y in tqdm(val_loader, desc=" Valid"):
-            x, y = x.to(device), y.to(device)
-            preds = model(x).argmax(1)
-            vc += (preds==y).sum().item()
-            vt += y.size(0)
-        vacc = vc/vt
-        print(f"Epoch {epoch}/{args.epochs} → Val Acc {vacc:.4f}")
-        if vacc > best_val:
-            best_val = vacc
+        val_loss = 0.0
+        val_total = 0
+        with torch.no_grad():
+            for x, y in tqdm(val_loader, desc=" Valid"):
+                x, y = x.to(device), y.to(device)
+                preds = model(x).squeeze(1)
+                loss = criterion(preds, y)
+                bs = y.size(0)
+                val_loss += loss.item()*bs
+                val_total += bs
+        val_mse = val_loss / val_total
+        print(f"Epoch {epoch}/{args.epochs} → Val MSE {val_mse:.6f}")
+        if val_mse < best_val:
+            best_val = val_mse
             torch.save(model.state_dict(), args.model_out)
             print("  Saved best model.")
 
-    print("Training complete. Best Val Acc:", best_val)
+    print("Training complete. Best Val MSE:", best_val)
 
 if __name__ == "__main__":
     args = parse_args()
