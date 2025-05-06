@@ -26,6 +26,8 @@ def parse_args():
                         help='Resize final GAF images to this size (pixels)')
     parser.add_argument('--method', type=str, choices=['summation','difference'],
                         default='summation', help='GAF method: summation or difference')
+    parser.add_argument('--workers', type=int, default=os.cpu_count(),
+                    help='Number of parallel workers')
     return parser.parse_args()
 
 

@@ -1,22 +1,20 @@
-python3 preprocess2.py \
-  data/SOLUSD \
-  gaf \
-  --window 5T \ 
+python3 preprocess.py data/SOLUSD_month gaf_month \
+  --window 5T \
   --stride 1T \
   --image_size 224 \
   --method summation \
   --workers 8
 
 
-  python3 preprocess_multiframe.py \
+python3 preprocess_multiframe.py \
+  data/SOLUSD_month \
+  gaf_multiframe_month \
   --freq 1S \
   --window 5T \
   --stride 1T \
   --image_size 224 \
   --method summation \
   --workers 8
-    data/SOLUSD \
-  gaf_multiframe 
 
 
 python3 preprocess_klines.py \

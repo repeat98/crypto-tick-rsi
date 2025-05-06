@@ -11,3 +11,13 @@ labels/
 *.pth
 gaf_multiframe/
 labels_multiframe/
+gaf_fractal/
+labels_fractal/
+gaf3c/
+labels3c/
+gaf6c/
+labels6c/
+gaf_multichannel/
+labels_multichannel/
+gaf6c_klines/
+labels6c_klines/

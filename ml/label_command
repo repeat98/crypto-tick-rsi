@@ -1,7 +1,7 @@
-python3 label_time_resampled.py \
-  /path/to/solusd_parquets/ \
-  /path/to/gaf_output/ \
-  /path/to/labels_dir/ \
+python3 label.py \
+  data/SOLUSD_month \
+  gaf_month \
+  labels_month \
   --freq 1S \
   --window 5T \
   --horizon 5T \
@@ -11,12 +11,23 @@ python3 label_time_resampled.py \
 
 
 python3 label_multiframe.py \
-  /Users/jannikassfalg/coding/crypto-tick-rsi/ml/data/SOLUSD \
-  ./gaf_multiframe \
-  ./labels_multiframe \
+  data/SOLUSD_month \
+  ./gaf_multiframe_month \
+  ./labels_multiframe_month\
   --freq 1S \
   --window 5T \
   --horizon 5T \
   --stride 1T \
   --q_low 0.2 \
   --q_high 0.8
+
+
+python3 label_fractal.py \
+  data/SOLUSD_month \
+  labels_fractal \
+  --freq 1S \
+  --window 1T \
+  --stride 30S \
+  --depth 4 \
+  --q_low 0.25 \
+  --q_high 0.75
