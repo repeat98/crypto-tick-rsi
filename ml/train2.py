@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
-GAF Regression Trainer
+GAF + RP + MTF + Raw Price Regression Trainer
 
-This script preprocesses tick data CSVs into Gramian Angular Field (GAF) images,
-labels them for regression based on future price movements, and trains a
-one-channel MobileNetV3-based regression model.
+This script preprocesses tick data CSVs into multi‐channel “images”:
+1) Gramian Angular Field (summation)  
+2) Gramian Angular Field (difference)  
+3) Recurrence Plot  
+4) Markov Transition Field  
+5) Raw normalized price image  
 
-Key Features:
-- Modular functions with clear responsibilities
-- Configurable via command-line arguments
-- Robust error handling and logging
-- Performance optimizations (batch schedulers, channels_last memory format)
+It then labels them for regression based on future price movements
+and trains a five‐channel MobileNetV3‐based regression model.
 """
 import argparse
 import logging
 import sys
+import os
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,6 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from PIL import Image
 from pyts.image import GramianAngularField, RecurrencePlot, MarkovTransitionField
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from torch.utils.data import Dataset, DataLoader
@@ -39,7 +39,7 @@ def setup_logging(level: str = "INFO") -> None:
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Train 1-channel GAF regression on tick CSVs"
+        description="Train multi‐channel GAF+RP+MTF+Raw regression on tick CSVs"
     )
     parser.add_argument("input_dir", help="Directory of tick CSVs")
     parser.add_argument("data_dir", help="Where to save/load .npz tensors")
@@ -73,7 +73,7 @@ def parse_args() -> argparse.Namespace:
         help="Number of DataLoader workers; defaults to CPU count"
     )
     parser.add_argument(
-        "--model_out", default="best_1c_regression.pth",
+        "--model_out", default="best_5c_regression.pth",
         help="Output path for best model weights"
     )
     parser.add_argument(
@@ -116,15 +116,19 @@ def preprocess(
     stride: str,
     logger: logging.Logger,
 ) -> None:
-    """Convert tick CSVs to GAF .npz files for each sliding window."""
+    """Convert tick CSVs to multi‐channel .npz files for each sliding window."""
     data_dir.mkdir(parents=True, exist_ok=True)
-    gaf_transformer = GramianAngularField(method="summation")
-    diff_transformer = GramianAngularField(method="difference")
-    rp_transformer = RecurrencePlot()
-    mtf_transformer = MarkovTransitionField()
+
+    # Transformers for each channel
+    gaf_summ = GramianAngularField(method="summation")
+    gaf_diff = GramianAngularField(method="difference")
+    rp_tf = RecurrencePlot()
+    mtf_tf = MarkovTransitionField()
+
     w_bars = int(pd.Timedelta(window) / pd.Timedelta(freq))
     s_bars = max(int(pd.Timedelta(stride) / pd.Timedelta(freq)), 1)
-    logger.info("Starting preprocessing: %d bars per window, stride %d bars", w_bars, s_bars)
+
+    logger.info("Starting preprocessing: %d bars/window, stride %d bars", w_bars, s_bars)
 
     for fp in sorted(input_dir.glob("*.csv")):
         try:
@@ -137,7 +141,7 @@ def preprocess(
                 .to_numpy(dtype=np.float32)
             )
         except Exception as e:
-            logger.warning("Skipping %s due to load error: %s", fp.name, e)
+            logger.warning("Skipping %s: %s", fp.name, e)
             continue
 
         n = len(series)
@@ -145,18 +149,25 @@ def preprocess(
             out_fp = data_dir / f"{fp.stem}_win{i:05d}.npz"
             if out_fp.exists():
                 continue
+
             window_arr = series[i : i + w_bars]
             normed = normalize(window_arr)
-            # Generate two GAF channels: summation and difference
-            sum_gaf = gaf_transformer.fit_transform(normed.reshape(1, -1))[0]
-            diff_gaf = diff_transformer.fit_transform(normed.reshape(1, -1))[0]
-            # Generate recurrence plot channel
-            rp = rp_transformer.fit_transform(normed.reshape(1, -1))[0]
-            # Generate Markov transition field channel
-            mtf = mtf_transformer.fit_transform(normed.reshape(1, -1))[0]
-            # Stack into 4-channel array: summation GAF, difference GAF, RP, and MTF
-            gaf = np.stack([sum_gaf, diff_gaf, rp, mtf], axis=0)
-            np.savez_compressed(out_fp, data=gaf)
+
+            # 1) Summation GAF
+            sum_gaf = gaf_summ.fit_transform(normed.reshape(1, -1))[0]
+            # 2) Difference GAF
+            diff_gaf = gaf_diff.fit_transform(normed.reshape(1, -1))[0]
+            # 3) Recurrence Plot
+            rp = rp_tf.fit_transform(normed.reshape(1, -1))[0]
+            # 4) Markov Transition Field
+            mtf = mtf_tf.fit_transform(normed.reshape(1, -1))[0]
+            # 5) Raw normalized price image
+            raw_price_image = np.tile(normed, (w_bars, 1))
+
+            # Stack into 5-channel array: [GAF_sum, GAF_diff, RP, MTF, RawPrice]
+            img_5c = np.stack([sum_gaf, diff_gaf, rp, mtf, raw_price_image], axis=0)
+            np.savez_compressed(out_fp, data=img_5c)
+
         logger.debug("Processed %s", fp.name)
 
 
@@ -169,11 +180,12 @@ def label(
     horizon: str,
     logger: logging.Logger,
 ) -> None:
-    """Generate CSV label files mapping GAF windows to future returns."""
+    """Generate CSV label files mapping windows to future returns."""
     labels_dir.mkdir(parents=True, exist_ok=True)
     w_bars = int(pd.Timedelta(window) / pd.Timedelta(freq))
     s_bars = max(int(pd.Timedelta(stride) / pd.Timedelta(freq)), 1)
     h_bars = int(pd.Timedelta(horizon) / pd.Timedelta(freq))
+
     logger.info("Starting labeling: window %d, horizon %d bars", w_bars, h_bars)
 
     for fp in sorted(input_dir.glob("*.csv")):
@@ -183,8 +195,9 @@ def label(
         try:
             df = load_csv(fp)
         except Exception as e:
-            logger.warning("Skipping %s due to load error: %s", fp.name, e)
+            logger.warning("Skipping %s: %s", fp.name, e)
             continue
+
         series = (
             df["close"].resample(freq).last().ffill().to_numpy(dtype=np.float32)
         )
@@ -204,7 +217,7 @@ def label(
 
 
 class KlineDataset(Dataset):
-    """PyTorch Dataset for GAF regression windows."""
+    """PyTorch Dataset for multi‐channel regression windows."""
 
     def __init__(self, labels_df: pd.DataFrame, data_dir: Path):
         self.df = labels_df.reset_index(drop=True)
@@ -222,26 +235,28 @@ class KlineDataset(Dataset):
 
 
 def build_model(device: torch.device) -> nn.Module:
-    """Instantiate and return the regression model."""
+    """Instantiate and return the regression model (5‐channel input)."""
     model = models.mobilenet_v3_small(
         weights=models.MobileNet_V3_Small_Weights.IMAGENET1K_V1
     )
-    # Adapt first conv for 4-channel input
+    # Adapt first convolution for 5-channel input
     orig_conv = model.features[0][0]
     model.features[0][0] = nn.Conv2d(
-        in_channels=4,
+        in_channels=5,
         out_channels=orig_conv.out_channels,
         kernel_size=orig_conv.kernel_size,
         stride=orig_conv.stride,
         padding=orig_conv.padding,
         bias=False,
     )
-    # Adapt classifier for regression
+    # Adapt classifier for single-output regression
     in_features = model.classifier[3].in_features
     model.classifier[3] = nn.Linear(in_features, 1)
+
     # Freeze feature extractor
     for param in model.features.parameters():
         param.requires_grad = False
+
     model.to(device).to(memory_format=torch.channels_last)
     return model
 
@@ -262,14 +277,14 @@ def train(
     df = df.sort_values("filename").reset_index(drop=True)
 
     # Split data
-    n_total = len(df)
-    n_train = int(n_total * 0.8)
-    n_val = int(n_total * 0.1)
+    n_total  = len(df)
+    n_train  = int(n_total * 0.8)
+    n_val    = int(n_total * 0.1)
     train_df = df.iloc[:n_train]
-    val_df = df.iloc[n_train : n_train + n_val]
+    val_df   = df.iloc[n_train : n_train + n_val]
 
     # DataLoaders
-    num_workers = args.workers or int(os.cpu_count())
+    num_workers = args.workers or os.cpu_count()
     train_loader = DataLoader(
         KlineDataset(train_df, data_dir),
         batch_size=args.batch_size,
@@ -297,13 +312,13 @@ def train(
         device = torch.device("cpu")
     logger.info("Using device: %s", device)
 
-    model = build_model(device)
+    model     = build_model(device)
     optimizer = optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=args.lr,
         weight_decay=args.wd,
     )
-    scheduler_cos = CosineAnnealingWarmRestarts(
+    scheduler_cos     = CosineAnnealingWarmRestarts(
         optimizer, T_0=args.t0, T_mult=1, eta_min=args.lr * 1e-2
     )
     scheduler_plateau = ReduceLROnPlateau(
@@ -313,39 +328,39 @@ def train(
 
     best_val_mse = float("inf")
     for epoch in range(1, args.epochs + 1):
-        # Training phase
+        # Training
         model.train()
-        train_loss = 0.0
+        train_loss  = 0.0
         train_count = 0
-        progress = tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs} [Train]")
-        for x_batch, y_batch in progress:
+        desc = f"Epoch {epoch}/{args.epochs} [Train]"
+        for x_batch, y_batch in tqdm(train_loader, desc=desc):
             x_batch = x_batch.to(device, non_blocking=True).to(memory_format=torch.channels_last)
             y_batch = y_batch.to(device, non_blocking=True)
 
             optimizer.zero_grad()
             preds = model(x_batch).squeeze(1)
-            loss = criterion(preds, y_batch)
+            loss  = criterion(preds, y_batch)
             loss.backward()
             optimizer.step()
             scheduler_cos.step(epoch + train_count / len(train_loader))
 
             bs = y_batch.size(0)
-            train_loss += loss.item() * bs
+            train_loss  += loss.item() * bs
             train_count += bs
-            progress.set_postfix(mse=train_loss / train_count)
 
-        # Validation phase
+        # Validation
         model.eval()
-        val_loss = 0.0
+        val_loss  = 0.0
         val_count = 0
-        with torch.no_grad():
-            for x_batch, y_batch in tqdm(val_loader, desc="Validation "):
-                x_batch = x_batch.to(device, non_blocking=True).to(memory_format=torch.channels_last)
-                y_batch = y_batch.to(device, non_blocking=True)
+        for x_batch, y_batch in tqdm(val_loader, desc="Validation"):
+            x_batch = x_batch.to(device, non_blocking=True).to(memory_format=torch.channels_last)
+            y_batch = y_batch.to(device, non_blocking=True)
+            with torch.no_grad():
                 preds = model(x_batch).squeeze(1)
-                loss = criterion(preds, y_batch)
-                val_loss += loss.item() * y_batch.size(0)
-                val_count += y_batch.size(0)
+                loss  = criterion(preds, y_batch)
+            val_loss  += loss.item() * y_batch.size(0)
+            val_count += y_batch.size(0)
+
         val_mse = val_loss / val_count
         logger.info("Epoch %d: Val MSE=%.6f", epoch, val_mse)
         scheduler_plateau.step(val_mse)
@@ -361,33 +376,18 @@ def train(
 
 def main() -> None:
     setup_logging()
-    args = parse_args()
-    input_dir = Path(args.input_dir)
-    data_dir = Path(args.data_dir)
+    args       = parse_args()
+    input_dir  = Path(args.input_dir)
+    data_dir   = Path(args.data_dir)
     labels_dir = Path(args.labels_dir)
+    logger     = logging.getLogger(__name__)
 
-    logger = logging.getLogger(__name__)
     try:
-        preprocess(
-            input_dir,
-            data_dir,
-            args.freq,
-            args.window,
-            args.stride,
-            logger,
-        )
-        label(
-            input_dir,
-            labels_dir,
-            args.freq,
-            args.window,
-            args.stride,
-            args.horizon,
-            logger,
-        )
+        preprocess(input_dir, data_dir, args.freq, args.window, args.stride, logger)
+        label(input_dir, labels_dir, args.freq, args.window, args.stride, args.horizon, logger)
         train(labels_dir, data_dir, args, logger)
     except Exception as e:
-        logger.exception("An error occurred during execution: %s", e)
+        logger.exception("Execution error: %s", e)
         sys.exit(1)
 
 
