@@ -20,14 +20,16 @@ def parse_args():
     p = argparse.ArgumentParser(
         description="Preprocess, label & train 1-channel GAF regression on tick CSVs"
     )
-    p.add_argument('input_dir',  help='Directory of tick CSVs')
-    p.add_argument('data_dir',   help='Where to save/load .npz tensors')
-    p.add_argument('labels_dir', help='Where to save label CSVs')
-    p.add_argument('--freq',       default='1S',  help="Resample frequency (e.g. '1S')")
+    p.add_argument('input_dir',   help='Directory of tick CSVs')
+    p.add_argument('data_dir',    help='Where to save/load .npz tensors')
+    p.add_argument('labels_dir',  help='Where to save label CSVs')
+    p.add_argument('--freq',       default='1S',  help="Resample frequency (e.g. '1S', '100L')")
     p.add_argument('--window',     default='5T',  help="Window length (e.g. '5T')")
-    p.add_argument('--stride',     default='1S',  help="Stride between windows")
-    p.add_argument('--horizon',    default='5T',  help="Future horizon for labeling")
-    p.add_argument('--image_size', type=int, default=224, help="Resize GAF to this size")
+    p.add_argument('--stride',     default='1S',  help="Stride between windows (e.g. '1S')")
+    p.add_argument('--horizon',    default='5T',  help="Future horizon for labeling (e.g. '5T')")
+    p.add_argument('--q_low',   type=float, default=0.2, help="Lower quantile (unused)")
+    p.add_argument('--q_high',  type=float, default=0.8, help="Upper quantile (unused)")
+    p.add_argument('--image_size', type=int, default=None, help="Resize GAF to this size (None = no resize)")
     p.add_argument('--batch_size', type=int, default=32)
     p.add_argument('--epochs',     type=int, default=20)
     p.add_argument('--lr',         type=float, default=1e-4)
@@ -38,7 +40,9 @@ def parse_args():
 
 def normalize(x: np.ndarray):
     mn, mx = x.min(), x.max()
-    return np.zeros_like(x) if mx == mn else ((x - mn)/(mx - mn))*2 - 1
+    if mx == mn:
+        return np.zeros_like(x)
+    return ((x - mn) / (mx - mn)) * 2 - 1
 
 def load_csv(fp):
     """
@@ -89,13 +93,13 @@ def preprocess(input_dir, data_dir, freq, window, stride, image_size):
             g = gasf.fit_transform(a.reshape(1, -1))[0]
 
             if image_size and g.shape[0] != image_size:
-                im = Image.fromarray(((g + 1)*127.5).astype(np.uint8))
+                im = Image.fromarray(((g + 1) * 127.5).astype(np.uint8))
                 im = im.resize((image_size, image_size), Image.BILINEAR)
-                g = (np.array(im, np.float32)/127.5) - 1.0
+                g = (np.array(im, np.float32) / 127.5) - 1.0
 
             np.savez_compressed(str(out), data=g.astype(np.float32))
 
-def label(input_dir, data_dir, labels_dir, freq, window, stride, horizon):
+def label(input_dir, data_dir, labels_dir, freq, window, stride, horizon, q_low, q_high):
     """
     Produce continuous-return labels for regression.
     """
@@ -122,6 +126,7 @@ def label(input_dir, data_dir, labels_dir, freq, window, stride, horizon):
 
         df = df.sort_index()
         series = df['close'].resample(freq).last().ffill().to_numpy(np.float32)
+
         idxs, rets = [], []
         for i in range(0, len(series) - w_bars + 1, s_bars):
             end = i + w_bars - 1
@@ -131,44 +136,45 @@ def label(input_dir, data_dir, labels_dir, freq, window, stride, horizon):
             rets.append((pf - p0) / p0 if p0 else 0.0)
             idxs.append(i)
 
-        rows = [{'filename': f"{fp.stem}_win{i:05d}.npz", 'label': r}
-                for r, i in zip(rets, idxs)]
+        rows = [
+            {'filename': f"{fp.stem}_win{i:05d}.npz", 'label': r}
+            for r, i in zip(rets, idxs)
+        ]
         pd.DataFrame(rows).to_csv(out, index=False)
 
 class KlineDataset(Dataset):
     def __init__(self, df, data_dir):
         self.df = df.reset_index(drop=True)
         self.data_dir = Path(data_dir)
+
     def __len__(self):
         return len(self.df)
+
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        arr = np.load(self.data_dir/row.filename)['data']
+        arr = np.load(self.data_dir / row.filename)['data']
         x = torch.from_numpy(arr)[None].float()
         y = torch.tensor(row.label, dtype=torch.float32)
         return x, y
 
 def train(labels_dir, data_dir, args):
-    # read labels
     dfs = [pd.read_csv(f) for f in sorted(Path(labels_dir).glob("*_labels.csv"))]
     df  = pd.concat(dfs, ignore_index=True).sort_values('filename')
     n   = len(df)
-    ti, vi = int(n*0.8), int(n*0.9)
+    ti, vi = int(n * 0.8), int(n * 0.9)
     train_df, val_df = df[:ti], df[ti:vi]
 
-    # DataLoaders with pinned memory and persistent workers
     train_loader = DataLoader(
         KlineDataset(train_df, data_dir),
         batch_size=args.batch_size, shuffle=True,
-        num_workers=args.workers, pin_memory=True, persistent_workers=True
+        num_workers=args.workers, persistent_workers=True, pin_memory=True
     )
     val_loader = DataLoader(
         KlineDataset(val_df, data_dir),
         batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True, persistent_workers=True
+        num_workers=args.workers, persistent_workers=True, pin_memory=True
     )
 
-    # Device & benchmark
     if torch.cuda.is_available():
         device = torch.device('cuda')
         torch.backends.cudnn.benchmark = True
@@ -177,11 +183,9 @@ def train(labels_dir, data_dir, args):
     else:
         device = torch.device('cpu')
 
-    # MobilenetV3 small → single-channel regression
     model = models.mobilenet_v3_small(
-        weights=models.MobileNet_V3_Small_Weights.IMAGENET1K_V1
+        weights=models.MobileNet_V3_Small_Weights.DEFAULT
     )
-    # adapt input conv
     orig = model.features[0][0]
     model.features[0][0] = nn.Conv2d(
         1, orig.out_channels,
@@ -190,19 +194,15 @@ def train(labels_dir, data_dir, args):
         padding=orig.padding,
         bias=False
     )
-    # output → 1
     in_f = model.classifier[3].in_features
     model.classifier[3] = nn.Linear(in_f, 1)
 
-    # freeze backbone
     for p in model.features.parameters():
         p.requires_grad = False
 
-    # move to device + channels_last
     model = model.to(device).to(memory_format=torch.channels_last)
 
-    optimizer = optim.AdamW(model.parameters(),
-                            lr=args.lr, weight_decay=args.wd)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
     scheduler = OneCycleLR(
         optimizer,
         max_lr=args.lr,
@@ -213,14 +213,12 @@ def train(labels_dir, data_dir, args):
     criterion = nn.MSELoss()
 
     best_val = float('inf')
-    for epoch in range(1, args.epochs+1):
+    for epoch in range(1, args.epochs + 1):
         model.train()
         total_loss = total_samples = 0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch} train")
         for x, y in pbar:
-            # to device, channels_last
-            x = x.to(device, non_blocking=True) \
-                 .to(memory_format=torch.channels_last)
+            x = x.to(device, non_blocking=True).to(memory_format=torch.channels_last)
             y = y.to(device, non_blocking=True)
 
             optimizer.zero_grad()
@@ -231,21 +229,19 @@ def train(labels_dir, data_dir, args):
             scheduler.step()
 
             bs = y.size(0)
-            total_loss += loss.item()*bs
+            total_loss += loss.item() * bs
             total_samples += bs
-            pbar.set_postfix(mse=total_loss/total_samples)
+            pbar.set_postfix(mse=total_loss / total_samples)
 
-        # validation
         model.eval()
         val_loss = val_samples = 0
         with torch.no_grad():
             for x, y in tqdm(val_loader, desc=" Valid"):
-                x = x.to(device, non_blocking=True) \
-                     .to(memory_format=torch.channels_last)
+                x = x.to(device, non_blocking=True).to(memory_format=torch.channels_last)
                 y = y.to(device, non_blocking=True)
                 preds = model(x).squeeze(1)
                 l = criterion(preds, y)
-                val_loss += l.item()*y.size(0)
+                val_loss += l.item() * y.size(0)
                 val_samples += y.size(0)
         val_mse = val_loss / val_samples
         print(f"Epoch {epoch}/{args.epochs} → Val MSE {val_mse:.6f}")
@@ -264,6 +260,7 @@ if __name__ == "__main__":
     )
     label(
         args.input_dir, args.data_dir, args.labels_dir,
-        args.freq, args.window, args.stride, args.horizon
+        args.freq, args.window, args.stride,
+        args.horizon, args.q_low, args.q_high
     )
     train(args.labels_dir, args.data_dir, args)
