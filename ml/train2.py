@@ -177,11 +177,43 @@ def preprocess(
             cfs, _ = pywt.cwt(normed, cwt_scales, 'morl')
             cwt = cfs
 
-            # Stack into 6-channel array: [GAF_sum, GAF_diff, RP, MTF, RawPrice, CWT]
-            img_6c = np.stack(
-                [sum_gaf, diff_gaf, rp, mtf, raw_price_image, cwt], axis=0
+            # 7) Short-Time Fourier Transform spectrogram
+            f, t, Zxx = None, None, None
+            try:
+                from scipy.signal import stft
+                f, t, Zxx = stft(normed, nperseg=min(64, len(normed)))
+                spec = np.abs(Zxx)
+                spec_tiled = np.tile(spec, (w_bars // spec.shape[0] + 1, w_bars // spec.shape[1] + 1))
+                stft_img = spec_tiled[:w_bars, :w_bars]
+            except Exception:
+                stft_img = np.zeros((w_bars, w_bars), dtype=np.float32)
+
+            # 8) RSI heatmap channel
+            series_pd = pd.Series(window_arr)
+            delta = series_pd.diff()
+            gain = delta.clip(lower=0)
+            loss = -delta.clip(upper=0)
+            avg_gain = gain.rolling(window=min(14, len(gain)), min_periods=1).mean()
+            avg_loss = loss.rolling(window=min(14, len(loss)), min_periods=1).mean()
+            rs = avg_gain / (avg_loss + 1e-6)
+            rsi = 100 - (100 / (1 + rs))
+            rsi_norm = (rsi / 50) - 1
+            rsi_img = np.tile(rsi_norm.to_numpy(dtype=np.float32), (w_bars, 1))
+            # 9) MACD histogram heatmap channel
+            ema_fast = series_pd.ewm(span=12, adjust=False).mean()
+            ema_slow = series_pd.ewm(span=26, adjust=False).mean()
+            macd = ema_fast - ema_slow
+            signal_line = macd.ewm(span=9, adjust=False).mean()
+            hist = macd - signal_line
+            hist_norm = hist / (hist.abs().max() + 1e-6)
+            hist_img = np.tile(hist_norm.to_numpy(dtype=np.float32), (w_bars, 1))
+
+            # Stack into 9-channel array: [GAF_sum, GAF_diff, RP, MTF, RawPrice, CWT, STFT, RSI, MACD_Hist]
+            img_9c = np.stack(
+                [sum_gaf, diff_gaf, rp, mtf, raw_price_image, cwt, stft_img, rsi_img, hist_img],
+                axis=0
             )
-            np.savez_compressed(out_fp, data=img_6c)
+            np.savez_compressed(out_fp, data=img_9c)
 
         logger.debug("Processed %s", fp.name)
 
@@ -254,10 +286,10 @@ def build_model(device: torch.device) -> nn.Module:
     model = models.mobilenet_v3_small(
         weights=models.MobileNet_V3_Small_Weights.IMAGENET1K_V1
     )
-    # Adapt first convolution for 6-channel input
+    # Adapt first convolution for 9-channel input
     orig_conv = model.features[0][0]
     model.features[0][0] = nn.Conv2d(
-        in_channels=6,
+        in_channels=9,
         out_channels=orig_conv.out_channels,
         kernel_size=orig_conv.kernel_size,
         stride=orig_conv.stride,
