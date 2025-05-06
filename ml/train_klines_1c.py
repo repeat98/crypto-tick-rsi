@@ -181,7 +181,7 @@ def train(labels_dir, data_dir, args):
                            max_lr=args.lr,
                            epochs=args.epochs,
                            steps_per_epoch=len(train_loader),
-                           pct_start=0.3)
+                           pct_start=0.1)
     criterion = nn.CrossEntropyLoss()
 
     best_val = 0.0
