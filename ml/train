@@ -1,51 +1,14 @@
-python3 train.py \
-  labels \
-  gaf \
+python3 train_tick_regression.py \
+  data/SOLUSD_month \
+  ./gaf \
+  ./labels \
+  --freq 1T \
+  --window 15T \
+  --stride 1T \
+  --horizon 5T \
   --batch_size 64 \
   --epochs 20 \
   --lr 1e-4 \
   --wd 1e-5 \
   --workers 8 \
-  --model_out best_model.pth
-
-
-python3 train_multiframe.py \
-  labels_multiframe_month \
-  gaf_multiframe_month \
-  --batch_size 32 \
-  --epochs 20 \
-  --lr 1e-4 \
-  --wd 1e-5 \
-  --workers 2 \
-  --max_train_batches 1200 \
-  --model_out best_multiframe.pth
-
-
-  python3 preprocess_fractal.py \
-  data/SOLUSD_month \
-  gaf_fractal \
-  --freq 1S \
-  --window 1T \
-  --stride 30S \
-  --depth 4 \
-  --image_size 224 \
-  --method summation \
-  --workers 8
-
-
-  python3 train_multichannel.py \
-  data/SOLUSD_month \
-  ./gaf3c \
-  ./labels3c \
-  --freq 1S \
-  --window 5T \
-  --stride 1T \
-  --horizon 5T \
-  --q_low 0.2 \
-  --q_high 0.8 \
-  --batch_size 32 \
-  --epochs 20 \
-  --lr 1e-4 \
-  --wd 1e-5 \
-  --workers 8 \
-  --model_out best_3c.pth
+  --model_out best_new.pth
