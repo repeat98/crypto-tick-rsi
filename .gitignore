@@ -24,3 +24,10 @@ labels6c_klines/
 gaf1c_klines/
 labels1c_klines/
 *.npz
+*.csv
+*.parquet
+*.json
+*.jsonl
+*.jsonl.gz
+*.jsonl.gz.part
+*.jsonl.gz.part.1
