@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-GAF + RP + MTF + Raw Price Regression Trainer
+GAF + RP + MTF + Raw Price + CWT Regression Trainer
 
 This script preprocesses tick data CSVs into multi‐channel “images”:
 1) Gramian Angular Field (summation)  
@@ -8,9 +8,10 @@ This script preprocesses tick data CSVs into multi‐channel “images”:
 3) Recurrence Plot  
 4) Markov Transition Field  
 5) Raw normalized price image  
+6) Continuous Wavelet Transform scalogram  
 
 It then labels them for regression based on future price movements
-and trains a five‐channel MobileNetV3‐based regression model.
+and trains a six‐channel MobileNetV3‐based regression model.
 """
 import argparse
 import logging
@@ -23,7 +24,12 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from pyts.image import GramianAngularField, RecurrencePlot, MarkovTransitionField
+from pyts.image import (
+    GramianAngularField,
+    RecurrencePlot,
+    MarkovTransitionField,
+)
+import pywt
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from torch.utils.data import Dataset, DataLoader
 from torchvision import models
@@ -39,7 +45,7 @@ def setup_logging(level: str = "INFO") -> None:
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Train multi‐channel GAF+RP+MTF+Raw regression on tick CSVs"
+        description="Train multi‐channel GAF+RP+MTF+Raw+CWT regression on tick CSVs"
     )
     parser.add_argument("input_dir", help="Directory of tick CSVs")
     parser.add_argument("data_dir", help="Where to save/load .npz tensors")
@@ -73,7 +79,7 @@ def parse_args() -> argparse.Namespace:
         help="Number of DataLoader workers; defaults to CPU count"
     )
     parser.add_argument(
-        "--model_out", default="best_5c_regression.pth",
+        "--model_out", default="best_6c_regression.pth",
         help="Output path for best model weights"
     )
     parser.add_argument(
@@ -125,8 +131,12 @@ def preprocess(
     rp_tf = RecurrencePlot()
     mtf_tf = MarkovTransitionField()
 
+    # Determine window/stride in bars
     w_bars = int(pd.Timedelta(window) / pd.Timedelta(freq))
     s_bars = max(int(pd.Timedelta(stride) / pd.Timedelta(freq)), 1)
+
+    # Scales for CWT: 1 through window length
+    cwt_scales = np.arange(1, w_bars + 1)
 
     logger.info("Starting preprocessing: %d bars/window, stride %d bars", w_bars, s_bars)
 
@@ -163,10 +173,15 @@ def preprocess(
             mtf = mtf_tf.fit_transform(normed.reshape(1, -1))[0]
             # 5) Raw normalized price image
             raw_price_image = np.tile(normed, (w_bars, 1))
+            # 6) Continuous Wavelet Transform scalogram via pywt
+            cfs, _ = pywt.cwt(normed, cwt_scales, 'morl')
+            cwt = cfs
 
-            # Stack into 5-channel array: [GAF_sum, GAF_diff, RP, MTF, RawPrice]
-            img_5c = np.stack([sum_gaf, diff_gaf, rp, mtf, raw_price_image], axis=0)
-            np.savez_compressed(out_fp, data=img_5c)
+            # Stack into 6-channel array: [GAF_sum, GAF_diff, RP, MTF, RawPrice, CWT]
+            img_6c = np.stack(
+                [sum_gaf, diff_gaf, rp, mtf, raw_price_image, cwt], axis=0
+            )
+            np.savez_compressed(out_fp, data=img_6c)
 
         logger.debug("Processed %s", fp.name)
 
@@ -235,14 +250,14 @@ class KlineDataset(Dataset):
 
 
 def build_model(device: torch.device) -> nn.Module:
-    """Instantiate and return the regression model (5‐channel input)."""
+    """Instantiate and return the regression model (6‐channel input)."""
     model = models.mobilenet_v3_small(
         weights=models.MobileNet_V3_Small_Weights.IMAGENET1K_V1
     )
-    # Adapt first convolution for 5-channel input
+    # Adapt first convolution for 6-channel input
     orig_conv = model.features[0][0]
     model.features[0][0] = nn.Conv2d(
-        in_channels=5,
+        in_channels=6,
         out_channels=orig_conv.out_channels,
         kernel_size=orig_conv.kernel_size,
         stride=orig_conv.stride,
@@ -268,7 +283,6 @@ def train(
     logger: logging.Logger,
 ) -> None:
     """Train the regression model and save the best checkpoint."""
-    # Load and concatenate all label files
     label_files = sorted(labels_dir.glob("*_labels.csv"))
     if not label_files:
         logger.error("No label files found in %s", labels_dir)
@@ -332,8 +346,7 @@ def train(
         model.train()
         train_loss  = 0.0
         train_count = 0
-        desc = f"Epoch {epoch}/{args.epochs} [Train]"
-        for x_batch, y_batch in tqdm(train_loader, desc=desc):
+        for x_batch, y_batch in tqdm(train_loader, desc=f"Epoch {epoch}/{args.epochs}"):
             x_batch = x_batch.to(device, non_blocking=True).to(memory_format=torch.channels_last)
             y_batch = y_batch.to(device, non_blocking=True)
 
